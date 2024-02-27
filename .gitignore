@@ -1,0 +1,8 @@
+.ipynb_checkpoints/
+PREPROD_20240208.db
+PRODUCTION.db
+TEST.db
+__pycache__/
+archive/
+streamproc.log
+database.db

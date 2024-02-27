@@ -1,0 +1,13 @@
+{
+
+    "intervals": {
+        "tick_loader": "1, 31",
+        "inference": "0,5,10,15,20,25,30,35,40,45,50,55"
+    }, 
+    "environments": {
+        "TEST": "sqlite:///TEST.db"
+        , "UNIT": "sqlite:///:memory:"
+        , "PREPROD": "sqlite:///PREPROD_20240208.db"
+        , "PROD": "sqlite:///PRODUCTION.db"
+    }
+}
