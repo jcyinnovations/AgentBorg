@@ -12,7 +12,7 @@ from typing import Tuple, List, Any
 from hyperparameters import Params
 
 params: Params = Params()
-
+acceptable_response_codes = [200]
 
 def interval_infill(df):
     '''
@@ -219,11 +219,24 @@ def observation_json(observation):
             "instances": batched_img.tolist(),
         }
     )
+    return data
+
 
 def predict_via_serving(observation, endpoint):
     json_data = observation_json(observation)
+    prediction = None
+    try:
+        response = requests.post(endpoint, data=json_data)
+        if response.status_code in acceptable_response_codes:
+            response = response.json()
+            if response and response['predictions']:
+                prediction = response['predictions'][0][0]
+    except:
+        logging.exception(f"Couldn't run inference via {endpoint}")
+    return prediction
 
-    json_response = requests.post(endpoint, data=json_data)
-    response = json.loads(json_response.text)
-    logging.debug(response)
-    return response["predictions"]
+def round_threshold(a, threshold=0.5):
+    if a > threshold:
+        return 1
+    else:
+        return 0

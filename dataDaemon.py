@@ -71,13 +71,18 @@ def job_generate_timesteps(
     msg: MANAGER_ERROR = MANAGER_ERROR.SUCCESS
     logging.info(f"Get ticks after last Timestep {latest_timestep_ts}")
     msg, ticks = manager.get_ticks_after_last_timestep(latest_timestep_ts, Asset.btcusd)
-    if msg == MANAGER_ERROR.SUCCESS:
+    # Only generate timesteps if #ticks > 2 timesteps (current plus subsequent)
+    if msg == MANAGER_ERROR.SUCCESS and len(ticks) >= 60:
+        # Truncate to multiples of 30 (avoid partial timesteps with less than 30 ticks)
+        # Drop the 'tail_index' ticks
+        tail_index: int = -1 * (len(ticks) % 30)
+        target_ticks = ticks if tail_index >= 0 else ticks[:tail_index]
         logging.info("Get most recent saved Timesteps for stat generation")
         # 34,000 is enough to recalculate the longest moving average (700 days)
         msg, current_timesteps = manager.get_recent_timesteps(34000, Asset.btcusd)
         if msg == MANAGER_ERROR.SUCCESS:
             logging.info(f"Retrieved Timesteps from {current_timesteps.index[0]} to {current_timesteps.index[-1]}")
-            new_timesteps = generate_timesteps_from_ticks(ticks)
+            new_timesteps = generate_timesteps_from_ticks(target_ticks)
             new_timesteps['asset'] = Asset.btcusd
             logging.info(f"Created {len(new_timesteps)} timesteps from {new_timesteps.index[0]} to {new_timesteps.index[-1]}")
             new_timesteps = compute_latest_stats(new_timesteps, current_timesteps, latest_timestep_ts)
@@ -97,32 +102,41 @@ def job_generate_timesteps(
                 logging.error("Failed to persist new timesteps.")
 
 
+def run_inference(
+    manager: DBManager
+    , model_endpoint: str
+    , max_gap: timedelta
+    , timesteps: pd.DataFrame
+    , current_time: datetime = None
+):
+    prediction = None
+    latest_timestep: datetime = timesteps.index[-1].to_pydatetime()
+
+    if current_time - latest_timestep < timedelta(minutes=max_gap):
+        observation = get_observation_v2(timesteps)
+        prediction = predict_via_serving(observation, endpoint=model_endpoint)
+    return prediction
+
+
 def job_run_inference(
-    scheduler: BackgroundScheduler
-    , manager: DBManager
+    manager: DBManager
     , model_endpoint: str
     , max_gap: timedelta
 ):
-    logging.info(f"\t\tINFERENCE: {datetime.now()}")
+    logging.info(f"\t\t->RUN INFERENCE: {datetime.now()}")
     msg: MANAGER_ERROR = MANAGER_ERROR.SUCCESS
     timesteps: pd.DataFrame
     msg, timesteps = manager.get_recent_timesteps(params.observation_size)
     if msg == MANAGER_ERROR.SUCCESS:
-        latest_timestep: datetime = timesteps.index[-1].to_pydatetime()
         current_time: datetime = manager.utc_convert(datetime.utcnow())
-
-        if current_time - latest_timestep < timedelta(minutes=max_gap):
-            observation = get_observation_v2(timesteps)
-            prediction = predict_via_serving(observation, endpoint=model_endpoint)
-            logging.info(f"\t\tTRADE: {current_time}, {prediction}")
-            '''
-            scheduler.add_job(
-                job_execute_trade
-                , 'date'
-                , args=[scheduler]
-                , next_run_time=datetime.now()
-            )
-            '''
+        prediction = run_inference(
+            manager
+            , model_endpoint
+            , max_gap
+            , timesteps
+            , current_time
+        )
+        logging.info(f"\t\t-->EXECUTE TRADE: {current_time}, {prediction}")
 
 
 #def job_execute_trade(scheduler: BackgroundScheduler):
@@ -150,12 +164,16 @@ def main(env, schedule, dburl, model_endpoint, max_gap):
         , args=[scheduler, manager]
         , minute=schedule
     )
+
+    '''
+    # Shutdown inference while testing in Juputerlab
     scheduler.add_job(
         job_run_inference
         , 'cron'
         , args=[scheduler, manager, model_endpoint, max_gap]
         , minute=",".join([str(int(i)+4) for i in "1,31".split(',')])
     )
+    '''
     # original intervals: '0,5,10,15,20,25,30,35,40,45,50,55'
     scheduler.start()
 

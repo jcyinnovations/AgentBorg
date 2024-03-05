@@ -1,5 +1,7 @@
-from sqlmodel import SQLModel, Field, create_engine, select, Session, Column, Enum, func, Relationship
+from sqlmodel import SQLModel, Field, create_engine, select, Session
+from sqlmodel import Column, Enum, func, Relationship, PrimaryKeyConstraint, ForeignKeyConstraint
 from sqlalchemy.exc import IntegrityError
+
 from typing import Optional, List, Tuple, Any 
 from datetime import datetime, timezone
 import pandas as pd
@@ -40,12 +42,16 @@ class Asset(str, enum.Enum):
 
 class Tick(SQLModel, table=True):
     date: datetime = Field(primary_key=True, nullable=False)
+    asset: Asset = Field(primary_key=True, nullable=False)
     o: float = Field(nullable=False)
     h: float = Field(nullable=False)
     l: float = Field(nullable=False)
     c: float = Field(nullable=False)
     v: float = Field(nullable=False)
-    asset: Asset 
+
+    __table_args__ = (
+        PrimaryKeyConstraint('date', 'asset'),
+    )
     
     def to_df(self):
         data = self.model_dump()
@@ -60,6 +66,7 @@ class Tick(SQLModel, table=True):
 
 class Timestep(SQLModel, table=True):
     date: datetime = Field(primary_key=True, nullable=False)
+    asset: Asset = Field(primary_key=True, nullable=False)
     c: float = Field(nullable=False)
     v: float = Field(nullable=False)
     hv: float = Field(nullable=False)
@@ -69,12 +76,17 @@ class Timestep(SQLModel, table=True):
     s350: float = Field(nullable=False)
     s700: float = Field(nullable=False)
     delta: float = Field(nullable=False)
-    asset: Asset 
+    probability: float 
+
+    __table_args__ = (
+        PrimaryKeyConstraint('date', 'asset'),
+    )
 
 class Trade(SQLModel, table=True):
-    date: datetime = Field(primary_key=True, nullable=False)
+    id: Optional[int] = Field(default=None, primary_key=True)
+    date: datetime = Field(nullable=False, index=True)
+    asset: Asset = Field(nullable=False, index=True)
     move: TradeType 
-    asset: Asset
     amount: float = Field(nullable=False)
     pct_acct: float = Field(nullable=False)
     price: float = Field(nullable=False)
@@ -414,6 +426,32 @@ class DBManager():
         try:
             with self.get_session() as session:
                 statement = select(Timestep).where(Timestep.asset == asset).order_by(Timestep.date.desc()).limit(frame_length)
+                df = pd.read_sql(statement, self.engine)
+                df['date'] = df['date'].apply(lambda dte: pendulum.timezone('utc').convert(dte) )
+                df.reset_index(drop=True, inplace=True)
+                df.set_index('date', inplace=True)
+                df.sort_index(inplace=True)
+                session.close()
+        except Exception:
+            msg = MANAGER_ERROR.ERROR
+            logging.exception(f"Failed to get latest {frame_length} timesteps")
+        return msg, df
+
+    def get_historical_timesteps(
+        self
+        , start: datetime
+        , frame_length: int = 34000
+        , asset: Asset=Asset.btcusd
+    ) -> Tuple[MANAGER_ERROR, pd.DataFrame]:
+        '''
+        Get frame_length latest Timesteps
+        '''
+        msg: MANAGER_ERROR = MANAGER_ERROR.SUCCESS
+        df: pd.DataFrame = None
+
+        try:
+            with self.get_session() as session:
+                statement = select(Timestep).where(Timestep.asset == asset).where(Timestep.date >= start).order_by(Timestep.date.asc()).limit(frame_length)
                 df = pd.read_sql(statement, self.engine)
                 df['date'] = df['date'].apply(lambda dte: pendulum.timezone('utc').convert(dte) )
                 df.reset_index(drop=True, inplace=True)
